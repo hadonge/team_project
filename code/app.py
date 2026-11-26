@@ -18,6 +18,29 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# 2025년 대한민국 공휴일 · 명절 연휴 · 대체공휴일 · 임시공휴일 사전
+HOLIDAYS_2025 = {
+    "2025-01-01": "신정",
+    "2025-01-27": "설날 임시공휴일",
+    "2025-01-28": "설날 연휴",
+    "2025-01-29": "설날 당일",
+    "2025-01-30": "설날 연휴",
+    "2025-03-01": "삼일절",
+    "2025-03-03": "삼일절 대체공휴일",
+    "2025-05-05": "어린이날·부처님오신날",
+    "2025-05-06": "부처님오신날 대체공휴일",
+    "2025-06-03": "제21대 대통령 선거일(임시공휴일)",
+    "2025-06-06": "현충일",
+    "2025-08-15": "광복절",
+    "2025-10-03": "개천절",
+    "2025-10-05": "추석 연휴",
+    "2025-10-06": "추석 당일",
+    "2025-10-07": "추석 연휴",
+    "2025-10-08": "추석 대체공휴일",
+    "2025-10-09": "한글날",
+    "2025-12-25": "성탄절",
+}
+
 # ---------------------------------------------------------
 # 2. 데이터 로드 및 전처리 함수
 # ---------------------------------------------------------
@@ -37,8 +60,16 @@ def load_data():
 
     df["일시"] = pd.to_datetime(df["일시"])
     df["날짜_문자"] = df["일시"].dt.strftime("%Y-%m-%d")
-    df["날짜_요일"] = df["날짜_문자"] + " (" + df["요일"] + ")"
+    df["공휴일명"] = df["날짜_문자"].map(HOLIDAYS_2025).fillna("일반일")
+    df["날짜_요일"] = df.apply(
+        lambda r: f"{r['날짜_문자']} ({r['요일']} · {r['공휴일명']})" if r["공휴일명"] != "일반일" else f"{r['날짜_문자']} ({r['요일']})",
+        axis=1
+    )
     df["주말구분"] = df["요일"].apply(lambda x: "주말(토·일)" if x in ["토요일", "일요일"] else "평일(월~금)")
+    df["일유형"] = df.apply(
+        lambda r: "공휴일·연휴" if r["공휴일명"] != "일반일" else ("주말(토·일)" if r["요일"] in ["토요일", "일요일"] else "평일(월~금)"),
+        axis=1
+    )
     return df
 
 df_raw = load_data()
@@ -59,7 +90,8 @@ with st.sidebar:
         [
             "📈 1. 일별 시계열 추이 비교",
             "📐 2. 날씨별 선형 회귀 분석",
-            "📋 3. 상관관계 및 데이터 전처리"
+            "📋 3. 상관관계 및 데이터 전처리",
+            "🎊 4. 2025 공휴일·연휴 특이일 분석"
         ]
     )
     
@@ -67,13 +99,15 @@ with st.sidebar:
     st.markdown("##### 📅 기간 · 요일 필터")
     day_filter = st.selectbox(
         "요일 조건 선택:",
-        ["전체 (365일)", "평일만 보기 (월~금)", "주말만 보기 (토·일)"]
+        ["전체 (365일)", "평일만 보기 (공휴일 제외)", "주말 및 공휴일만 보기", "순수 평일만 (월~금 전체)"]
     )
     
-    if day_filter == "평일만 보기 (월~금)":
+    if day_filter == "평일만 보기 (공휴일 제외)":
+        df = df_raw[df_raw["일유형"] == "평일(월~금)"].copy()
+    elif day_filter == "주말 및 공휴일만 보기":
+        df = df_raw[df_raw["일유형"] != "평일(월~금)"].copy()
+    elif day_filter == "순수 평일만 (월~금 전체)":
         df = df_raw[df_raw["주말구분"] == "평일(월~금)"].copy()
-    elif day_filter == "주말만 보기 (토·일)":
-        df = df_raw[df_raw["주말구분"] == "주말(토·일)"].copy()
     else:
         df = df_raw.copy()
 
@@ -81,7 +115,8 @@ with st.sidebar:
     st.info(
         f"**현재 선택된 데이터:** {len(df)}일\n\n"
         "• 기상: 서울 종관기상관측(108)\n"
-        "• 교통: 따릉이 · 시내버스 전수"
+        "• 교통: 따릉이 · 시내버스 전수\n"
+        "• 공휴일: 2025 법정·대체·임시 19일"
     )
 
 # ---------------------------------------------------------
@@ -90,7 +125,7 @@ with st.sidebar:
 st.title("🌤️ 2025 서울시 날씨·대기질과 교통수단(따릉이·버스) 이용량 분석")
 st.markdown(
     """
-    **2025년 서울시의 기상(기온·강수량·습도) 및 대기질(미세먼지·초미세먼지)** 변화가 
+    **2025년 서울시의 기상(기온·강수량·습도) 및 대기질(미세먼지·초미세먼지)**, 그리고 **명절·공휴일** 요인이 
     야외 공유교통(**따릉이**)과 실내 대중교통(**시내버스**) 이용량에 미치는 영향을 비교·검증합니다.
     """
 )
@@ -104,39 +139,31 @@ col4.metric("평균 기온 / 강수일", f"{df['평균기온(°C)'].mean():.1f} 
 st.divider()
 
 # =========================================================
-# 메뉴 1: 일별 시계열 추이 (개별 색상 & 투명도 컨트롤 포함)
+# 메뉴 1: 일별 시계열 추이 (버튼으로 투명도·색상 설정창 열기/닫기)
 # =========================================================
 if menu == "📈 1. 일별 시계열 추이 비교":
     st.subheader("📈 일별 교통 이용량 및 기상·대기질 변화 추이")
-    st.caption("💡 그래프 위에 마우스를 올리면 **날짜와 요일**, 세부 수치가 함께 표시됩니다.")
+    st.caption("💡 그래프 위에 마우스를 올리면 **날짜와 요일(공휴일 포함)**, 세부 수치가 함께 표시됩니다.")
 
-    view_mode = st.radio(
-        "표시할 교통수단 선택:",
-        ["따릉이 + 버스 함께 보기 (변화율 비교)", "따릉이대여건수만 보기", "버스 이용량만 보기"],
-        horizontal=True
-    )
+    top_c1, top_c2 = st.columns([3, 1.2])
+    with top_c1:
+        view_mode = st.radio(
+            "표시할 교통수단 선택:",
+            ["따릉이 + 버스 함께 보기 (변화율 비교)", "따릉이대여건수만 보기", "버스 이용량만 보기"],
+            horizontal=True
+        )
+    with top_c2:
+        st.write("")
+        show_holiday_markers = st.checkbox("🎊 공휴일·연휴 위치 표시", value=True)
 
     if view_mode == "따릉이 + 버스 함께 보기 (변화율 비교)":
-        st.info("ℹ️ 따릉이(약 10만 건)와 버스(약 460만 명)는 단위 크기가 크게 다르므로, 각 수단의 **평균 대비 이용량 비율(평균=100%)**로 환산하여 두 교통수단의 움직임을 한눈에 비교합니다.")
+        st.info("ℹ️ 따릉이(약 10만 건)와 버스(약 460만 명)는 단위 크기가 다르므로, 각 수단의 **평균 대비 이용량 비율(평균=100%)**로 환산하여 두 교통수단의 움직임을 한눈에 비교합니다.")
 
-    # 그래프가 들어갈 자리 예약
+    # 그래프 자리 예약
     chart_placeholder = st.empty()
 
-    # -----------------------------------------------------
-    # 그래프 아래 컨트롤 패널 (교통수단 + 기상변수 색상 & 투명도)
-    # -----------------------------------------------------
-    st.markdown("##### 🎨 교통수단 선 색상 및 투명도 설정")
-    t_col1, t_col2 = st.columns(2)
-    with t_col1:
-        c1, c2 = st.columns([1, 2.5])
-        bike_color = c1.color_picker("따릉이 색", "#2B8A3E", key="bike_color")
-        bike_alpha = c2.slider("따릉이 투명도", 0.1, 1.0, 1.0, 0.05, key="bike_alpha")
-    with t_col2:
-        c3, c4 = st.columns([1, 2.5])
-        bus_color = c3.color_picker("버스 색", "#1864AB", key="bus_color")
-        bus_alpha = c4.slider("버스 투명도", 0.1, 1.0, 1.0, 0.05, key="bus_alpha")
-
-    st.markdown("##### 🎛️ 기상·대기질 변수 선택 및 개별 색상·투명도 설정")
+    # 기상·대기질 변수 선택 체크박스
+    st.markdown("##### 🎛️ 그래프에 함께 표시할 기상·대기질 변수 선택")
     weather_options = {
         "평균기온(°C)": {"color": "#FF6B6B", "default": True, "alpha": 0.85},
         "최고기온(°C)": {"color": "#FFA94D", "default": False, "alpha": 0.80},
@@ -147,21 +174,38 @@ if menu == "📈 1. 일별 시계열 추이 비교":
         "초미세먼지": {"color": "#495057", "default": False, "alpha": 0.70},
     }
 
-    selected_configs = {}
-    # 4열 + 3열 2줄로 깔끔하게 카드형 배치
-    var_items = list(weather_options.items())
-    row1_cols = st.columns(4)
-    row2_cols = st.columns(4)
-    all_cols = row1_cols + row2_cols
+    chk_cols = st.columns(len(weather_options))
+    checked_vars = {}
+    for idx, (var_name, props) in enumerate(weather_options.items()):
+        with chk_cols[idx]:
+            checked_vars[var_name] = st.checkbox(var_name, value=props["default"], key=f"chk_{var_name}")
 
-    for idx, (var_name, props) in enumerate(var_items):
-        with all_cols[idx]:
-            with st.container(border=True):
-                is_checked = st.checkbox(f"**{var_name}**", value=props["default"], key=f"chk_{var_name}")
-                sub_c1, sub_c2 = st.columns([1, 2.2])
-                picked_color = sub_c1.color_picker("색상", props["color"], key=f"col_{var_name}", label_visibility="collapsed")
-                picked_alpha = sub_c2.slider("투명도", 0.1, 1.0, props["alpha"], 0.05, key=f"alp_{var_name}", label_visibility="collapsed")
-                if is_checked:
+    # 버튼을 눌러야 열리는 색상 및 투명도 설정창 (st.popover 또는 st.expander)
+    selected_configs = {}
+    with st.expander("🎨 그래프 선 색상 및 투명도 세부 설정 열기 (클릭해서 조절)", expanded=False):
+        st.markdown("**1) 교통수단 선 색상 및 투명도**")
+        t_col1, t_col2 = st.columns(2)
+        with t_col1:
+            c1, c2 = st.columns([1, 2.5])
+            bike_color = c1.color_picker("따릉이 색", "#2B8A3E", key="bike_color")
+            bike_alpha = c2.slider("따릉이 투명도", 0.1, 1.0, 1.0, 0.05, key="bike_alpha")
+        with t_col2:
+            c3, c4 = st.columns([1, 2.5])
+            bus_color = c3.color_picker("버스 색", "#1864AB", key="bus_color")
+            bus_alpha = c4.slider("버스 투명도", 0.1, 1.0, 1.0, 0.05, key="bus_alpha")
+
+        st.markdown("**2) 기상 · 대기질 변수별 색상 및 투명도**")
+        row1_cols = st.columns(4)
+        row2_cols = st.columns(4)
+        all_cols = row1_cols + row2_cols
+
+        for idx, (var_name, props) in enumerate(weather_options.items()):
+            with all_cols[idx]:
+                st.caption(f"**{var_name}**")
+                sc1, sc2 = st.columns([1, 2.2])
+                picked_color = sc1.color_picker("색상", props["color"], key=f"col_{var_name}", label_visibility="collapsed")
+                picked_alpha = sc2.slider("투명도", 0.1, 1.0, props["alpha"], 0.05, key=f"alp_{var_name}", label_visibility="collapsed")
+                if checked_vars[var_name]:
                     selected_configs[var_name] = {"color": picked_color, "alpha": picked_alpha}
 
     # -----------------------------------------------------
@@ -221,7 +265,6 @@ if menu == "📈 1. 일별 시계열 추이 비교":
         )
         left_y_title = f"<b>{target_ts} ({unit_str})</b>"
 
-    # 선택된 기상·대기질 변수 추가 (사용자 지정 색상 + 투명도 적용)
     for var_name, cfg in selected_configs.items():
         if var_name == "일강수량(mm)":
             fig_ts.add_trace(
@@ -251,6 +294,17 @@ if menu == "📈 1. 일별 시계열 추이 비교":
                 secondary_y=True
             )
 
+    # 공휴일 세로 점선 표시 옵션
+    if show_holiday_markers:
+        hol_df = df[df["공휴일명"] != "일반일"]
+        for _, row in hol_df.iterrows():
+            fig_ts.add_vline(
+                x=row["일시"],
+                line_width=1,
+                line_dash="dot",
+                line_color="rgba(224, 49, 49, 0.35)"
+            )
+
     fig_ts.update_layout(
         height=490,
         hovermode="x unified",
@@ -269,16 +323,16 @@ if menu == "📈 1. 일별 시계열 추이 비교":
 
 
 # =========================================================
-# 메뉴 2: 선형 회귀 분석 (점/회귀선 색상 & 투명도 조절 포함)
+# 메뉴 2: 선형 회귀 분석
 # =========================================================
 elif menu == "📐 2. 날씨별 선형 회귀 분석":
     st.subheader("📐 기상·대기질 변수에 따른 교통 이용량 선형 회귀 분석")
-    st.caption("💡 점 위에 마우스를 올리면 해당 날짜의 **날짜·요일**과 실제 관측치를 확인할 수 있습니다.")
+    st.caption("💡 점 위에 마우스를 올리면 해당 날짜의 **날짜·요일(공휴일 포함)**과 실제 관측치를 확인할 수 있습니다.")
 
     reg_chart_placeholder = st.empty()
 
-    st.markdown("##### 🎛️ 회귀 분석 변수 및 스타일 설정")
-    c1, c2, c3 = st.columns([2, 2, 1.5])
+    st.markdown("##### 🎛️ 회귀 분석 변수 선택")
+    c1, c2, c3 = st.columns([2, 2, 1.8])
     with c1:
         x_var = st.selectbox(
             "독립변수 (X축: 날씨·대기질)",
@@ -292,18 +346,21 @@ elif menu == "📐 2. 날씨별 선형 회귀 분석":
             index=0
         )
     with c3:
-        st.write("")
-        st.write("")
-        split_weekend = st.checkbox("평일 / 주말 색상 구분", value=True)
+        color_mode = st.selectbox(
+            "점 색상 구분 기준",
+            ["일유형 (평일 / 주말 / 공휴일)", "평일 / 주말 구분", "단일 색상"],
+            index=0
+        )
 
-    # 산점도 점 투명도 & 회귀선 색상 설정
-    s1, s2, s3 = st.columns(3)
-    with s1:
-        dot_alpha = st.slider("관측치 점 투명도", 0.1, 1.0, 0.75, 0.05)
-    with s2:
-        line_reg_color = st.color_picker("회귀직선 색상", "#E03131")
-    with s3:
-        weekday_color = st.color_picker("평일 점 색상", "#1C7ED6") if split_weekend else st.color_picker("전체 점 색상", "#2B8A3E")
+    # 접기/펼치기 버튼으로 투명도·색상 조절창 열기
+    with st.expander("🎨 산점도 점 투명도 및 회귀선 색상 설정 열기 (클릭해서 조절)", expanded=False):
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            dot_alpha = st.slider("관측치 점 투명도", 0.1, 1.0, 0.78, 0.05)
+        with s2:
+            line_reg_color = st.color_picker("회귀직선 색상", "#E03131")
+        with s3:
+            single_dot_color = st.color_picker("기본 점 색상", "#2B8A3E")
 
     X = df[[x_var]].values
     y = df[y_var].values
@@ -317,13 +374,23 @@ elif menu == "📐 2. 날씨별 선형 회귀 분석":
     x_range = np.linspace(df[x_var].min(), df[x_var].max(), 100)
     y_pred_line = model.predict(x_range.reshape(-1, 1))
 
-    if split_weekend:
+    if color_mode == "일유형 (평일 / 주말 / 공휴일)":
+        fig_reg = px.scatter(
+            df,
+            x=x_var,
+            y=y_var,
+            color="일유형",
+            color_discrete_map={"평일(월~금)": "#1C7ED6", "주말(토·일)": "#F76707", "공휴일·연휴": "#E03131"},
+            custom_data=["날짜_요일", "평균기온(°C)", "일강수량(mm)", "미세먼지"],
+            opacity=dot_alpha
+        )
+    elif color_mode == "평일 / 주말 구분":
         fig_reg = px.scatter(
             df,
             x=x_var,
             y=y_var,
             color="주말구분",
-            color_discrete_map={"평일(월~금)": weekday_color, "주말(토·일)": "#F76707"},
+            color_discrete_map={"평일(월~금)": "#1C7ED6", "주말(토·일)": "#F76707"},
             custom_data=["날짜_요일", "평균기온(°C)", "일강수량(mm)", "미세먼지"],
             opacity=dot_alpha
         )
@@ -332,7 +399,7 @@ elif menu == "📐 2. 날씨별 선형 회귀 분석":
             df,
             x=x_var,
             y=y_var,
-            color_discrete_sequence=[weekday_color],
+            color_discrete_sequence=[single_dot_color],
             custom_data=["날짜_요일", "평균기온(°C)", "일강수량(mm)", "미세먼지"],
             opacity=dot_alpha
         )
@@ -417,7 +484,7 @@ elif menu == "📋 3. 상관관계 및 데이터 전처리":
             """
             ### 🔍 핵심 연구 결론
             1. **야외 수단(따릉이)의 높은 기상 민감도:** 최고기온과 따릉이 대여건수는 강한 양의 상관관계($r = +0.66, R^2 = 0.435$)를 보였으며, 강수량 증가 시 이용량이 뚜렷하게 감소($r = -0.33$)했습니다.
-            2. **대중교통(시내버스)의 비탄력성:** 시내버스는 기온($R^2 = 0.015$)과 강수량($R^2 = 0.001$)의 영향을 거의 받지 않았으며, 기상 변화보다 **평일·주말(요일) 요인**에 의해 이용량이 결정되는 필수 교통수단임을 확인했습니다.
+            2. **대중교통(시내버스)의 비탄력성 및 요일·공휴일 효과:** 시내버스는 기온($R^2 = 0.015$)과 강수량($R^2 = 0.001$)의 영향을 거의 받지 않았으며, 날씨보다 **평일·주말·공휴일 여부**가 이용량을 결정짓는 핵심 요인입니다.
             3. **미세먼지의 제한적 영향:** 2025년 일평균 기준 미세먼지($r = +0.04$)와 초미세먼지($r = -0.02$)는 단독 선형 모델에서 교통 이용량에 미치는 설명력이 낮았습니다.
             """
         )
@@ -426,10 +493,129 @@ elif menu == "📋 3. 상관관계 및 데이터 전처리":
             """
             ### 🛠️ 데이터 출처 및 전처리·연구 한계
             - **데이터 출처:** 기상청 기상자료개방포털(종관기상관측 ASOS 서울 108지점), 서울열린데이터광장(공공자전거 일별 대여건수, 버스노선별 승하차 인원, 대기오염도 측정 정보).
-            - **전처리 과정:** 2025년 365일(2025-01-01 ~ 2025-12-31) 기준 일별 병합, 무강수일 결측치(8일) `0.0mm` 대체, 서울시 측정소별 대기질 일평균 산출 및 달력 요일 매핑 검증 완료.
+            - **전처리 과정:** 2025년 365일(2025-01-01 ~ 2025-12-31) 기준 일별 병합, 무강수일 결측치(8일) `0.0mm` 대체, 서울시 측정소별 대기질 일평균 산출, 달력 요일 및 2025년 법정·대체·임시공휴일(19일) 매핑 완료.
             - **연구의 한계 및 표본 범위:** 택시 및 민간 공유 전기자전거는 2025년 일별 서울시 전체 이용 데이터가 공개되지 않아 분석 대상에서 제외하고, 완전한 전수 데이터가 확보된 **따릉이**와 **시내버스**로 비교 범위를 명확히 설정했습니다.
             """
         )
 
     with st.expander("📄 통합 데이터셋 원본 미리보기 (전체 행 조회)"):
         st.dataframe(df.drop(columns=["날짜_문자", "날짜_요일"]), use_container_width=True)
+
+
+# =========================================================
+# 메뉴 4: 2025 공휴일 · 명절 연휴 · 대체공휴일 특이일 분석
+# =========================================================
+elif menu == "🎊 4. 2025 공휴일·연휴 특이일 분석":
+    st.subheader("🎊 2025년 명절 연휴 · 대체공휴일 · 임시공휴일 교통 이용량 비교")
+    st.markdown(
+        """
+        날씨 외에 대중교통 이용량에 큰 변동을 주는 **설날 연휴(임시공휴일 포함), 추석 황금연휴, 삼일절·부처님오신날 대체공휴일, 대통령 선거일** 등 
+        **2025년 공휴일(총 19일)**의 실제 이용량 변화를 평일·주말과 비교합니다.
+        """
+    )
+
+    # 1) 평일 vs 주말 vs 공휴일·연휴 평균 비교 지표
+    avg_by_type = df_raw.groupby("일유형")[["따릉이대여건수", "버스 이용량"]].mean()
+
+    k1, k2, k3 = st.columns(3)
+    with k1:
+        st.metric(
+            "평일 평균 (244일)",
+            f"버스 {avg_by_type.loc['평일(월~금)', '버스 이용량']:,.0f}명",
+            f"따릉이 {avg_by_type.loc['평일(월~금)', '따릉이대여건수']:,.0f}건"
+        )
+    with k2:
+        st.metric(
+            "일반 주말 평균 (102일)",
+            f"버스 {avg_by_type.loc['주말(토·일)', '버스 이용량']:,.0f}명",
+            f"따릉이 {avg_by_type.loc['주말(토·일)', '따릉이대여건수']:,.0f}건"
+        )
+    with k3:
+        st.metric(
+            "공휴일·명절 연휴 평균 (19일)",
+            f"버스 {avg_by_type.loc['공휴일·연휴', '버스 이용량']:,.0f}명 (평일 대비 -46.6%)",
+            f"따릉이 {avg_by_type.loc['공휴일·연휴', '따릉이대여건수']:,.0f}건 (평일 대비 -40.2%)"
+        )
+
+    st.divider()
+
+    # 2) 공휴일 19일 개별 막대 그래프 비교
+    hol_only = df_raw[df_raw["공휴일명"] != "일반일"].copy()
+    hol_only["라벨"] = hol_only["날짜_문자"].str.slice(5) + " " + hol_only["공휴일명"]
+
+    sel_hol_mode = st.radio(
+        "비교할 교통수단 선택:",
+        ["시내버스 이용량 (공휴일별 비교)", "따릉이 대여건수 (공휴일별 비교)"],
+        horizontal=True
+    )
+
+    if sel_hol_mode == "시내버스 이용량 (공휴일별 비교)":
+        y_col = "버스 이용량"
+        bar_col = "#1864AB"
+        avg_line = avg_by_type.loc["평일(월~금)", "버스 이용량"]
+        unit_h = "명"
+    else:
+        y_col = "따릉이대여건수"
+        bar_col = "#2B8A3E"
+        avg_line = avg_by_type.loc["평일(월~금)", "따릉이대여건수"]
+        unit_h = "건"
+
+    fig_hol = px.bar(
+        hol_only,
+        x="라벨",
+        y=y_col,
+        text=y_col,
+        color="평균기온(°C)",
+        color_continuous_scale="RdYlBu_r",
+        custom_data=["날짜_요일", "평균기온(°C)", "일강수량(mm)"],
+        labels={"라벨": "2025년 공휴일·연휴", y_col: f"{y_col} ({unit_h})", "평균기온(°C)": "평균기온(°C)"}
+    )
+    fig_hol.update_traces(
+        texttemplate="%{text:,.0f}",
+        textposition="outside",
+        hovertemplate=(
+            "<b>%{customdata[0]}</b><br>"
+            f"{y_col}: " + "%{y:,.0f}" + unit_h + "<br>"
+            "평균기온: %{customdata[1]:.1f}°C | 강수량: %{customdata[2]:.1f}mm"
+            "<extra></extra>"
+        )
+    )
+    fig_hol.add_hline(
+        y=avg_line,
+        line_dash="dash",
+        line_color="#E03131",
+        annotation_text=f"평일 평균 ({avg_line:,.0f}{unit_h})",
+        annotation_position="top right"
+    )
+    fig_hol.update_layout(
+        height=480,
+        title=f"<b>2025년 주요 공휴일·연휴별 {y_col} 및 기온 분포</b>",
+        xaxis_tickangle=-35,
+        yaxis=dict(tickformat=",", range=[0, hol_only[y_col].max() * 1.18]),
+        margin=dict(l=20, r=20, t=50, b=80)
+    )
+    st.plotly_chart(fig_hol, use_container_width=True)
+
+    # 3) 명절 연휴 집중 분석 (설날 vs 추석)
+    c_left, c_right = st.columns(2)
+    with c_left:
+        st.info(
+            """
+            **❄️ 1월 설날 연휴 (1/27 임시공휴일 ~ 1/30 연휴)**
+            - **버스 이용량 급감:** 귀성 인파 이동 및 직장 휴무로 **설날 당일(1/29) 167.7만 명**까지 떨어지며 2025년 연중 최저치를 기록했습니다.
+            - **따릉이 한파 영향:** 연휴 기간 영하권 기온(-4.6°C)과 눈·비가 겹쳐 대여량이 1.5만 건 수준으로 크게 위축되었습니다.
+            """
+        )
+    with c_right:
+        st.success(
+            """
+            **🌕 10월 추석 황금연휴 (10/3 개천절 ~ 10/9 한글날)**
+            - **추석 당일(10/6) 최저점:** 비(36.8mm)와 명절 당일이 겹치며 **따릉이 10,493건(연중 최저)**, **버스 171.1만 명**을 기록했습니다.
+            - **대체공휴일(10/8) 반등:** 비가 그치고 맑아진 추석 대체공휴일에는 나들이 수요가 몰리며 따릉이가 **126,692건**으로 평일 평균을 넘어섰습니다.
+            """
+        )
+
+    st.markdown("##### 📋 2025년 공휴일 · 대체공휴일 · 임시공휴일 전체 상세표 (19일)")
+    display_hol = hol_only[["날짜_문자", "요일", "공휴일명", "평균기온(°C)", "일강수량(mm)", "미세먼지", "따릉이대여건수", "버스 이용량"]].copy()
+    display_hol.columns = ["날짜", "요일", "공휴일 구분", "평균기온(°C)", "일강수량(mm)", "미세먼지", "따릉이 대여(건)", "버스 이용량(명)"]
+    st.dataframe(display_hol, use_container_width=True, hide_index=True)
