@@ -14,11 +14,12 @@ from sklearn.linear_model import LinearRegression
 st.set_page_config(
     page_title="2025 서울시 날씨·대기질과 대중교통 이용량 회귀 분석",
     page_icon="🚲",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # ---------------------------------------------------------
-# 2. 데이터 로드 및 전처리 함수 (엑셀·CSV 자동 탐색)
+# 2. 데이터 로드 및 전처리 함수
 # ---------------------------------------------------------
 @st.cache_data
 def load_data():
@@ -40,49 +41,78 @@ def load_data():
     df["주말구분"] = df["요일"].apply(lambda x: "주말(토·일)" if x in ["토요일", "일요일"] else "평일(월~금)")
     return df
 
-df = load_data()
-if df is None:
+df_raw = load_data()
+if df_raw is None:
     st.error("🚨 데이터 파일을 찾을 수 없습니다. 깃허브의 app.py와 같은 폴더에 데이터 파일을 올려주세요!")
     st.stop()
 
 # ---------------------------------------------------------
-# 3. 헤더 및 핵심 요약 지표 (KPI)
+# 3. 왼쪽 사이드바 메뉴 (제미나이 스타일 내비게이션)
+# ---------------------------------------------------------
+with st.sidebar:
+    st.title("🚲 분석 메뉴")
+    st.caption("2025 서울시 기상·교통 데이터 연구")
+    st.divider()
+    
+    menu = st.radio(
+        "이동할 화면을 선택하세요:",
+        [
+            "📈 1. 일별 시계열 추이 비교",
+            "📐 2. 날씨별 선형 회귀 분석",
+            "📋 3. 상관관계 및 데이터 전처리"
+        ]
+    )
+    
+    st.divider()
+    st.markdown("##### 📅 기간 · 요일 필터")
+    day_filter = st.selectbox(
+        "요일 조건 선택:",
+        ["전체 (365일)", "평일만 보기 (월~금)", "주말만 보기 (토·일)"]
+    )
+    
+    if day_filter == "평일만 보기 (월~금)":
+        df = df_raw[df_raw["주말구분"] == "평일(월~금)"].copy()
+    elif day_filter == "주말만 보기 (토·일)":
+        df = df_raw[df_raw["주말구분"] == "주말(토·일)"].copy()
+    else:
+        df = df_raw.copy()
+
+    st.divider()
+    st.info(
+        f"**현재 선택된 데이터:** {len(df)}일\n\n"
+        "• 기상: 서울 종관기상관측(108)\n"
+        "• 교통: 따릉이 · 시내버스 전수"
+    )
+
+# ---------------------------------------------------------
+# 4. 상단 공통 헤더 및 핵심 지표 (KPI)
 # ---------------------------------------------------------
 st.title("🌤️ 2025 서울시 날씨·대기질과 교통수단(따릉이·버스) 이용량 분석")
 st.markdown(
     """
-    본 대시보드는 **2025년 1월 1일 ~ 12월 31일(365일)** 서울시의 기상(기온·강수량·습도) 및 대기질(미세먼지·초미세먼지) 데이터가 
-    야외 공유교통(**따릉이**)과 실내 대중교통(**시내버스**) 이용량에 미치는 영향을 **선형 회귀 분석**으로 검증합니다.
+    **2025년 서울시의 기상(기온·강수량·습도) 및 대기질(미세먼지·초미세먼지)** 변화가 
+    야외 공유교통(**따릉이**)과 실내 대중교통(**시내버스**) 이용량에 미치는 영향을 비교·검증합니다.
     """
 )
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("분석 기간 (총 일수)", "2025년 (365일)", "결측치 0건")
+col1.metric("분석 일수", f"{len(df)}일", day_filter)
 col2.metric("일평균 따릉이 대여건수", f"{df['따릉이대여건수'].mean():,.0f} 건", f"최대 {df['따릉이대여건수'].max():,.0f} 건")
 col3.metric("일평균 시내버스 이용량", f"{df['버스 이용량'].mean():,.0f} 명", f"최대 {df['버스 이용량'].max():,.0f} 명")
-col4.metric("2025 서울 연평균 기온", f"{df['평균기온(°C)'].mean():.1f} °C", f"연강수일 {(df['일강수량(mm)'] > 0).sum()}일")
+col4.metric("평균 기온 / 강수일", f"{df['평균기온(°C)'].mean():.1f} °C", f"비 온 날 {(df['일강수량(mm)'] > 0).sum()}일")
 
 st.divider()
 
-# ---------------------------------------------------------
-# 4. 탭 구성 (1: 시계열 추이 / 2: 선형 회귀 분석 / 3: 상관관계 및 데이터 개요)
-# ---------------------------------------------------------
-tab1, tab2, tab3 = st.tabs([
-    "📈 1. 일별 시계열 추이 & 변수 선택",
-    "📐 2. 날씨별 교통 이용량 선형 회귀 분석",
-    "📋 3. 상관관계 & 데이터 전처리 개요"
-])
-
 # =========================================================
-# TAB 1: 일별 시계열 추이 (그래프 아래 체크박스로 변수 On/Off)
+# 메뉴 1: 일별 시계열 추이 (따릉이·버스 개별 및 동시 비교)
 # =========================================================
-with tab1:
-    st.subheader("일별 교통 이용량 및 기상·대기질 변화 추이")
-    st.caption("💡 그래프 위의 점이나 선에 마우스를 가까이 대면 **날짜와 요일**, 세부 수치가 함께 표시됩니다.")
+if menu == "📈 1. 일별 시계열 추이 비교":
+    st.subheader("📈 일별 교통 이용량 및 기상·대기질 변화 추이")
+    st.caption("💡 그래프 위에 마우스를 올리면 **날짜와 요일**, 세부 수치가 함께 표시됩니다.")
 
-    target_ts = st.radio(
-        "기준 교통수단 선택:",
-        ["따릉이대여건수", "버스 이용량"],
+    view_mode = st.radio(
+        "표시할 교통수단 선택:",
+        ["따릉이 + 버스 함께 보기 (변화율 비교)", "따릉이대여건수만 보기", "버스 이용량만 보기"],
         horizontal=True
     )
 
@@ -98,22 +128,60 @@ with tab1:
 
     fig_ts = make_subplots(specs=[[{"secondary_y": True}]])
 
-    bar_color = "#2B8A3E" if target_ts == "따릉이대여건수" else "#1864AB"
-    fig_ts.add_trace(
-        go.Scatter(
-            x=df["일시"],
-            y=df[target_ts],
-            name=target_ts,
-            mode="lines",
-            line=dict(color=bar_color, width=2.2),
-            customdata=df[["날짜_요일"]],
-            hovertemplate="<b>%{customdata[0]}</b><br>" + f"{target_ts}: " + "%{y:,.0f}<extra></extra>"
-        ),
-        secondary_y=False
-    )
+    # 1) 교통수단 선 추가 (함께 보기 vs 단독 보기)
+    if view_mode == "따릉이 + 버스 함께 보기 (변화율 비교)":
+        st.info("ℹ️ 따릉이(약 10만 건)와 버스(약 460만 명)는 단위 크기가 크게 다르므로, 각 수단의 **평균 대비 이용량 비율(평균=100%)**로 환산하여 두 교통수단의 움직임을 한눈에 비교합니다.")
+        bike_idx = (df["따릉이대여건수"] / df["따릉이대여건수"].mean()) * 100
+        bus_idx = (df["버스 이용량"] / df["버스 이용량"].mean()) * 100
 
+        fig_ts.add_trace(
+            go.Scatter(
+                x=df["일시"],
+                y=bike_idx,
+                name="따릉이 (평균=100%)",
+                mode="lines",
+                line=dict(color="#2B8A3E", width=2.2),
+                customdata=np.stack([df["날짜_요일"], df["따릉이대여건수"]], axis=-1),
+                hovertemplate="<b>%{customdata[0]}</b><br>따릉이: %{y:.1f}% (실제 %{customdata[1]:,.0f}건)<extra></extra>"
+            ),
+            secondary_y=False
+        )
+        fig_ts.add_trace(
+            go.Scatter(
+                x=df["일시"],
+                y=bus_idx,
+                name="시내버스 (평균=100%)",
+                mode="lines",
+                line=dict(color="#1864AB", width=2.2),
+                customdata=np.stack([df["날짜_요일"], df["버스 이용량"]], axis=-1),
+                hovertemplate="<b>%{customdata[0]}</b><br>시내버스: %{y:.1f}% (실제 %{customdata[1]:,.0f}명)<extra></extra>"
+            ),
+            secondary_y=False
+        )
+        left_y_title = "<b>평균 대비 이용량 지수 (평균 = 100%)</b>"
+    else:
+        target_ts = "따릉이대여건수" if view_mode == "따릉이대여건수만 보기" else "버스 이용량"
+        unit_str = "건" if target_ts == "따릉이대여건수" else "명"
+        line_color = "#2B8A3E" if target_ts == "따릉이대여건수" else "#1864AB"
+
+        fig_ts.add_trace(
+            go.Scatter(
+                x=df["일시"],
+                y=df[target_ts],
+                name=target_ts,
+                mode="lines",
+                line=dict(color=line_color, width=2.3),
+                customdata=df[["날짜_요일"]],
+                hovertemplate="<b>%{customdata[0]}</b><br>" + f"{target_ts}: " + "%{y:,.0f}" + unit_str + "<extra></extra>"
+            ),
+            secondary_y=False
+        )
+        left_y_title = f"<b>{target_ts} ({unit_str})</b>"
+
+    # 그래프가 들어갈 자리 예약 (체크박스를 그래프 아래에 두기 위함)
     chart_placeholder = st.empty()
 
+    # 그래프 아래 체크박스 UI
     st.markdown("##### 🎛️ 그래프에 함께 표시할 기상·대기질 변수 선택 (체크박스로 켜고 끄기)")
     chk_cols = st.columns(len(weather_options))
     selected_vars = []
@@ -153,24 +221,29 @@ with tab1:
                 secondary_y=True
             )
 
+    # X축 날짜 한글 포맷 설정 (Jan 2025 -> 2025년 01월)
     fig_ts.update_layout(
-        height=470,
+        height=480,
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=20, r=20, t=40, b=20),
-        xaxis_title="날짜 (2025년)"
+        xaxis=dict(
+            title="<b>날짜 (2025년)</b>",
+            tickformat="%Y년 %m월",
+            dtick="M1"
+        )
     )
-    fig_ts.update_yaxes(title_text=f"<b>{target_ts}</b>", secondary_y=False)
+    fig_ts.update_yaxes(title_text=left_y_title, secondary_y=False, tickformat=",")
     fig_ts.update_yaxes(title_text="<b>기상 · 대기질 수치</b>", secondary_y=True)
 
     chart_placeholder.plotly_chart(fig_ts, use_container_width=True)
 
 
 # =========================================================
-# TAB 2: 선형 회귀 분석 (그래프 아래 변수 선택)
+# 메뉴 2: 선형 회귀 분석
 # =========================================================
-with tab2:
-    st.subheader("기상·대기질 변수에 따른 교통 이용량 선형 회귀 분석")
+elif menu == "📐 2. 날씨별 선형 회귀 분석":
+    st.subheader("📐 기상·대기질 변수에 따른 교통 이용량 선형 회귀 분석")
     st.caption("💡 점 위에 마우스를 올리면 해당 날짜의 **날짜·요일**과 실제 관측치를 확인할 수 있습니다.")
 
     reg_chart_placeholder = st.empty()
@@ -226,12 +299,14 @@ with tab2:
             opacity=0.75
         )
 
+    unit_text = "건" if y_var == "따릉이대여건수" else "명"
+
     fig_reg.update_traces(
         marker=dict(size=8),
         hovertemplate=(
             "<b>%{customdata[0]}</b><br>"
             f"{x_var}: " + "%{x:.1f}<br>"
-            f"{y_var}: " + "%{y:,.0f}<br>"
+            f"{y_var}: " + "%{y:,.0f}" + unit_text + "<br>"
             "평균기온: %{customdata[1]:.1f}°C | 강수량: %{customdata[2]:.1f}mm | 미세먼지: %{customdata[3]:.1f}"
             "<extra></extra>"
         )
@@ -242,22 +317,24 @@ with tab2:
             x=x_range,
             y=y_pred_line,
             mode="lines",
-            name=f"선형 회귀선 (R²={r2:.3f})",
+            name=f"선형 회귀선 (결정계수 R²={r2:.3f})",
             line=dict(color="#E03131", width=3)
         )
     )
 
     fig_reg.update_layout(
-        height=460,
-        title=f"<b>[{x_var}] vs [{y_var}] 선형 회귀 분석</b>",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=50, b=20)
+        height=470,
+        title=f"<b>[{x_var}] 변화에 따른 [{y_var}] 선형 회귀 분석</b>",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, title_text="구분"),
+        margin=dict(l=20, r=20, t=50, b=20),
+        xaxis_title=f"<b>{x_var}</b>",
+        yaxis_title=f"<b>{y_var} ({unit_text})</b>",
+        yaxis=dict(tickformat=",")
     )
 
     reg_chart_placeholder.plotly_chart(fig_reg, use_container_width=True)
 
     m1, m2, m3 = st.columns(3)
-    unit_text = "건" if y_var == "따릉이대여건수" else "명"
     m1.metric("회귀 기울기 (1단위 증가 시 변화량)", f"{slope:+,.1f} {unit_text}")
     m2.metric("결정계수 (R² 설명력)", f"{r2:.3f} ({r2*100:.1f}%)")
     m3.metric("상관계수 (r)", f"{corr:+.3f}")
@@ -272,10 +349,10 @@ with tab2:
 
 
 # =========================================================
-# TAB 3: 상관관계 히트맵 및 데이터 전처리·한계점 설명
+# 메뉴 3: 상관관계 및 데이터 전처리 개요
 # =========================================================
-with tab3:
-    st.subheader("전체 변수 간 상관관계 히트맵 및 연구 요약")
+elif menu == "📋 3. 상관관계 및 데이터 전처리":
+    st.subheader("📋 전체 변수 간 상관관계 행렬 및 데이터 전처리 보고서")
 
     num_cols = [
         "평균기온(°C)", "최저기온(°C)", "최고기온(°C)",
@@ -290,7 +367,8 @@ with tab3:
         color_continuous_scale="RdBu_r",
         zmin=-1,
         zmax=1,
-        aspect="auto"
+        aspect="auto",
+        labels=dict(color="상관계수")
     )
     fig_corr.update_layout(height=480, title="<b>2025 서울시 기상·대기질 및 교통 이용량 상관계수 행렬</b>")
     st.plotly_chart(fig_corr, use_container_width=True)
@@ -315,5 +393,5 @@ with tab3:
             """
         )
 
-    with st.expander("📄 2025 통합 데이터셋 원본 미리보기 (365행 전체)"):
+    with st.expander("📄 통합 데이터셋 원본 미리보기 (전체 행 조회)"):
         st.dataframe(df.drop(columns=["날짜_문자", "날짜_요일"]), use_container_width=True)
