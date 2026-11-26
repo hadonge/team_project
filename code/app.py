@@ -42,6 +42,34 @@ SPECIAL_DAYS_2025 = {
     "2025-12-25": "성탄절",
 }
 
+# 미세먼지 / 초미세먼지 등급 판별 함수 (환경부 기준)
+def get_pm10_grade(val):
+    if val <= 30:
+        return "좋음"
+    elif val <= 80:
+        return "보통"
+    elif val <= 150:
+        return "나쁨"
+    else:
+        return "매우 나쁨"
+
+def get_pm25_grade(val):
+    if val <= 15:
+        return "좋음"
+    elif val <= 35:
+        return "보통"
+    elif val <= 75:
+        return "나쁨"
+    else:
+        return "매우 나쁨"
+
+GRADE_COLORS = {
+    "좋음": (51, 154, 240),      # 파랑
+    "보통": (64, 192, 87),       # 초록
+    "나쁨": (253, 126, 20),      # 주황
+    "매우 나쁨": (250, 82, 82)   # 빨강
+}
+
 # ---------------------------------------------------------
 # 2. 데이터 로드 및 전처리 함수
 # ---------------------------------------------------------
@@ -79,6 +107,8 @@ def load_data():
             return "평일(월~금)"
 
     df["일유형"] = df.apply(classify_day, axis=1)
+    df["미세먼지등급"] = df["미세먼지"].apply(get_pm10_grade)
+    df["초미세먼지등급"] = df["초미세먼지"].apply(get_pm25_grade)
     return df
 
 df_raw = load_data()
@@ -148,7 +178,7 @@ col4.metric("평균 기온 / 강수일", f"{df['평균기온(°C)'].mean():.1f} 
 st.divider()
 
 # =========================================================
-# 메뉴 1: 일별 시계열 추이 (버튼으로 투명도·색상 설정창 열기/닫기)
+# 메뉴 1: 일별 시계열 추이 (버튼으로 색상·투명도·미세먼지 배경 설정)
 # =========================================================
 if menu == "📈 1. 일별 시계열 추이 비교":
     st.subheader("📈 일별 교통 이용량 및 기상·대기질 변화 추이")
@@ -188,8 +218,21 @@ if menu == "📈 1. 일별 시계열 추이 비교":
             checked_vars[var_name] = st.checkbox(var_name, value=props["default"], key=f"chk_{var_name}")
 
     selected_configs = {}
-    with st.expander("🎨 그래프 선 색상 및 투명도 세부 설정 열기 (클릭해서 조절)", expanded=False):
-        st.markdown("**1) 교통수단 선 색상 및 투명도**")
+    with st.expander("🎨 그래프 선 색상 · 투명도 및 미세먼지 등급 배경색 설정 열기 (클릭)", expanded=False):
+        st.markdown("**1) 🌫️ 미세먼지 등급별 그래프 배경색 표시 (좋음=파랑 · 보통=초록 · 나쁨=주황 · 매우나쁨=빨강)**")
+        bg_c1, bg_c2 = st.columns([2, 1.5])
+        with bg_c1:
+            pm_bg_mode = st.radio(
+                "배경색 기준 선택:",
+                ["표시 안 함", "미세먼지(PM10) 등급 배경", "초미세먼지(PM2.5) 등급 배경"],
+                horizontal=True,
+                key="pm_bg_mode"
+            )
+        with bg_c2:
+            pm_bg_alpha = st.slider("배경색 투명도", 0.05, 0.50, 0.18, 0.02, key="pm_bg_alpha")
+
+        st.divider()
+        st.markdown("**2) 교통수단 선 색상 및 투명도**")
         t_col1, t_col2 = st.columns(2)
         with t_col1:
             c1, c2 = st.columns([1, 2.5])
@@ -200,7 +243,7 @@ if menu == "📈 1. 일별 시계열 추이 비교":
             bus_color = c3.color_picker("버스 색", "#1864AB", key="bus_color")
             bus_alpha = c4.slider("버스 투명도", 0.1, 1.0, 1.0, 0.05, key="bus_alpha")
 
-        st.markdown("**2) 기상 · 대기질 변수별 색상 및 투명도**")
+        st.markdown("**3) 기상 · 대기질 변수별 색상 및 투명도**")
         row1_cols = st.columns(4)
         row2_cols = st.columns(4)
         all_cols = row1_cols + row2_cols
@@ -216,6 +259,45 @@ if menu == "📈 1. 일별 시계열 추이 비교":
 
     fig_ts = make_subplots(specs=[[{"secondary_y": True}]])
 
+    # 미세먼지 / 초미세먼지 등급 배경색 추가
+    if pm_bg_mode != "표시 안 함":
+        grade_col = "미세먼지등급" if pm_bg_mode == "미세먼지(PM10) 등급 배경" else "초미세먼지등급"
+        shapes = []
+        for _, row in df.iterrows():
+            g = row[grade_col]
+            r, gr, b = GRADE_COLORS[g]
+            x0 = row["일시"] - pd.Timedelta(hours=12)
+            x1 = row["일시"] + pd.Timedelta(hours=12)
+            shapes.append(
+                dict(
+                    type="rect",
+                    xref="x",
+                    yref="paper",
+                    x0=x0,
+                    x1=x1,
+                    y0=0,
+                    y1=1,
+                    fillcolor=f"rgba({r}, {gr}, {b}, {pm_bg_alpha})",
+                    line=dict(width=0),
+                    layer="below"
+                )
+            )
+        fig_ts.update_layout(shapes=shapes)
+
+        # 범례용 더미 트레이스 추가 (좋음/보통/나쁨/매우 나쁨 색상 안내)
+        for g_name, (r, gr, b) in GRADE_COLORS.items():
+            fig_ts.add_trace(
+                go.Scatter(
+                    x=[None],
+                    y=[None],
+                    mode="markers",
+                    marker=dict(size=10, symbol="square", color=f"rgba({r}, {gr}, {b}, 0.7)"),
+                    name=f"등급: {g_name}",
+                    showlegend=True
+                ),
+                secondary_y=False
+            )
+
     if view_mode == "따릉이 + 버스 함께 보기 (변화율 비교)":
         bike_idx = (df["따릉이대여건수"] / df["따릉이대여건수"].mean()) * 100
         bus_idx = (df["버스 이용량"] / df["버스 이용량"].mean()) * 100
@@ -228,8 +310,8 @@ if menu == "📈 1. 일별 시계열 추이 비교":
                 mode="lines",
                 opacity=bike_alpha,
                 line=dict(color=bike_color, width=2.4),
-                customdata=np.stack([df["날짜_요일"], df["따릉이대여건수"]], axis=-1),
-                hovertemplate="<b>%{customdata[0]}</b><br>따릉이: %{y:.1f}% (실제 %{customdata[1]:,.0f}건)<extra></extra>"
+                customdata=np.stack([df["날짜_요일"], df["따릉이대여건수"], df["미세먼지등급"], df["초미세먼지등급"]], axis=-1),
+                hovertemplate="<b>%{customdata[0]}</b><br>따릉이: %{y:.1f}% (실제 %{customdata[1]:,.0f}건)<br>미세먼지: %{customdata[2]} | 초미세먼지: %{customdata[3]}<extra></extra>"
             ),
             secondary_y=False
         )
@@ -261,8 +343,8 @@ if menu == "📈 1. 일별 시계열 추이 비교":
                 mode="lines",
                 opacity=line_alpha,
                 line=dict(color=line_color, width=2.5),
-                customdata=df[["날짜_요일"]],
-                hovertemplate="<b>%{customdata[0]}</b><br>" + f"{target_ts}: " + "%{y:,.0f}" + unit_str + "<extra></extra>"
+                customdata=np.stack([df["날짜_요일"], df["미세먼지등급"], df["초미세먼지등급"]], axis=-1),
+                hovertemplate="<b>%{customdata[0]}</b><br>" + f"{target_ts}: " + "%{y:,.0f}" + unit_str + "<br>미세먼지: %{customdata[1]} | 초미세먼지: %{customdata[2]}<extra></extra>"
             ),
             secondary_y=False
         )
@@ -300,7 +382,7 @@ if menu == "📈 1. 일별 시계열 추이 비교":
     if show_holiday_markers:
         hol_df = df[df["특이일명"] != "일반일"]
         for _, row in hol_df.iterrows():
-            v_col = "rgba(43, 138, 62, 0.5)" if row["일유형"] == "수능일" else "rgba(224, 49, 49, 0.35)"
+            v_col = "rgba(43, 138, 62, 0.55)" if row["일유형"] == "수능일" else "rgba(224, 49, 49, 0.35)"
             fig_ts.add_vline(
                 x=row["일시"],
                 line_width=1.2,
@@ -309,10 +391,10 @@ if menu == "📈 1. 일별 시계열 추이 비교":
             )
 
     fig_ts.update_layout(
-        height=490,
+        height=500,
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=40, b=20),
+        margin=dict(l=20, r=20, t=50, b=20),
         xaxis=dict(
             title="<b>날짜 (2025년)</b>",
             tickformat="%Y년 %m월",
@@ -326,7 +408,7 @@ if menu == "📈 1. 일별 시계열 추이 비교":
 
 
 # =========================================================
-# 메뉴 2: 선형 회귀 분석
+# 메뉴 2: 선형 회귀 분석 (미세먼지/초미세먼지 선택 시 등급 배경 지원)
 # =========================================================
 elif menu == "📐 2. 날씨별 선형 회귀 분석":
     st.subheader("📐 기상·대기질 변수에 따른 교통 이용량 선형 회귀 분석")
@@ -355,14 +437,16 @@ elif menu == "📐 2. 날씨별 선형 회귀 분석":
             index=0
         )
 
-    with st.expander("🎨 산점도 점 투명도 및 회귀선 색상 설정 열기 (클릭해서 조절)", expanded=False):
-        s1, s2, s3 = st.columns(3)
+    with st.expander("🎨 산점도 점 투명도 · 회귀선 색상 및 미세먼지 구간 배경 설정 열기 (클릭)", expanded=False):
+        s1, s2, s3, s4 = st.columns([1.2, 1, 1, 1.3])
         with s1:
             dot_alpha = st.slider("관측치 점 투명도", 0.1, 1.0, 0.78, 0.05)
         with s2:
             line_reg_color = st.color_picker("회귀직선 색상", "#E03131")
         with s3:
             single_dot_color = st.color_picker("기본 점 색상", "#2B8A3E")
+        with s4:
+            show_reg_pm_bg = st.checkbox("🌫️ 미세먼지 X축 등급 배경 표시", value=True, help="X축이 미세먼지 또는 초미세먼지일 때 좋음(파랑)·보통(초록)·나쁨(주황)·매우나쁨(빨강) 구간을 배경에 표시합니다.")
 
     X = df[[x_var]].values
     y = df[y_var].values
@@ -388,7 +472,7 @@ elif menu == "📐 2. 날씨별 선형 회귀 분석":
                 "공휴일·연휴": "#E03131",
                 "수능일": "#2B8A3E"
             },
-            custom_data=["날짜_요일", "평균기온(°C)", "일강수량(mm)", "미세먼지"],
+            custom_data=["날짜_요일", "평균기온(°C)", "일강수량(mm)", "미세먼지", "미세먼지등급"],
             opacity=dot_alpha
         )
     elif color_mode == "평일 / 주말 구분":
@@ -398,7 +482,7 @@ elif menu == "📐 2. 날씨별 선형 회귀 분석":
             y=y_var,
             color="주말구분",
             color_discrete_map={"평일(월~금)": "#1C7ED6", "주말(토·일)": "#F76707"},
-            custom_data=["날짜_요일", "평균기온(°C)", "일강수량(mm)", "미세먼지"],
+            custom_data=["날짜_요일", "평균기온(°C)", "일강수량(mm)", "미세먼지", "미세먼지등급"],
             opacity=dot_alpha
         )
     else:
@@ -407,7 +491,7 @@ elif menu == "📐 2. 날씨별 선형 회귀 분석":
             x=x_var,
             y=y_var,
             color_discrete_sequence=[single_dot_color],
-            custom_data=["날짜_요일", "평균기온(°C)", "일강수량(mm)", "미세먼지"],
+            custom_data=["날짜_요일", "평균기온(°C)", "일강수량(mm)", "미세먼지", "미세먼지등급"],
             opacity=dot_alpha
         )
 
@@ -419,7 +503,7 @@ elif menu == "📐 2. 날씨별 선형 회귀 분석":
             "<b>%{customdata[0]}</b><br>"
             f"{x_var}: " + "%{x:.1f}<br>"
             f"{y_var}: " + "%{y:,.0f}" + unit_text + "<br>"
-            "평균기온: %{customdata[1]:.1f}°C | 강수량: %{customdata[2]:.1f}mm | 미세먼지: %{customdata[3]:.1f}"
+            "평균기온: %{customdata[1]:.1f}°C | 강수량: %{customdata[2]:.1f}mm | 미세먼지: %{customdata[3]:.1f} (%{customdata[4]})"
             "<extra></extra>"
         )
     )
@@ -433,6 +517,35 @@ elif menu == "📐 2. 날씨별 선형 회귀 분석":
             line=dict(color=line_reg_color, width=3)
         )
     )
+
+    # X축이 미세먼지 또는 초미세먼지일 때 등급 구간 배경색 추가
+    if show_reg_pm_bg and x_var in ["미세먼지", "초미세먼지"]:
+        max_x = max(df[x_var].max() * 1.05, 160 if x_var == "미세먼지" else 85)
+        if x_var == "미세먼지":
+            bands = [
+                (0, 30, "좋음", "rgba(51, 154, 240, 0.14)"),
+                (30, 80, "보통", "rgba(64, 192, 87, 0.14)"),
+                (80, 150, "나쁨", "rgba(253, 126, 20, 0.14)"),
+                (150, max_x, "매우 나쁨", "rgba(250, 82, 82, 0.14)")
+            ]
+        else:
+            bands = [
+                (0, 15, "좋음", "rgba(51, 154, 240, 0.14)"),
+                (15, 35, "보통", "rgba(64, 192, 87, 0.14)"),
+                (35, 75, "나쁨", "rgba(253, 126, 20, 0.14)"),
+                (75, max_x, "매우 나쁨", "rgba(250, 82, 82, 0.14)")
+            ]
+        for x0, x1, label, fill_c in bands:
+            if x0 < df[x_var].max() * 1.05:
+                fig_reg.add_vrect(
+                    x0=x0,
+                    x1=min(x1, df[x_var].max() * 1.05),
+                    fillcolor=fill_c,
+                    layer="below",
+                    line_width=0,
+                    annotation_text=label,
+                    annotation_position="top left"
+                )
 
     fig_reg.update_layout(
         height=470,
@@ -600,6 +713,6 @@ elif menu == "🎊 4. 2025 공휴일·수능일 분석":
     st.plotly_chart(fig_hol, use_container_width=True)
 
     st.markdown("##### 📋 2025년 공휴일(19일) 및 수능일 전체 상세표 (총 20일)")
-    display_hol = hol_only[["날짜_문자", "요일", "특이일명", "평균기온(°C)", "일강수량(mm)", "미세먼지", "따릉이대여건수", "버스 이용량"]].copy()
-    display_hol.columns = ["날짜", "요일", "구분", "평균기온(°C)", "일강수량(mm)", "미세먼지", "따릉이 대여(건)", "버스 이용량(명)"]
+    display_hol = hol_only[["날짜_문자", "요일", "특이일명", "평균기온(°C)", "일강수량(mm)", "미세먼지", "초미세먼지", "따릉이대여건수", "버스 이용량"]].copy()
+    display_hol.columns = ["날짜", "요일", "구분", "평균기온(°C)", "일강수량(mm)", "미세먼지", "초미세먼지", "따릉이 대여(건)", "버스 이용량(명)"]
     st.dataframe(display_hol, use_container_width=True, hide_index=True)
