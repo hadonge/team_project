@@ -47,7 +47,7 @@ if df_raw is None:
     st.stop()
 
 # ---------------------------------------------------------
-# 3. 왼쪽 사이드바 메뉴 (제미나이 스타일 내비게이션)
+# 3. 왼쪽 사이드바 메뉴 (내비게이션)
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("🚲 분석 메뉴")
@@ -104,7 +104,7 @@ col4.metric("평균 기온 / 강수일", f"{df['평균기온(°C)'].mean():.1f} 
 st.divider()
 
 # =========================================================
-# 메뉴 1: 일별 시계열 추이 (따릉이·버스 개별 및 동시 비교)
+# 메뉴 1: 일별 시계열 추이 (개별 색상 & 투명도 컨트롤 포함)
 # =========================================================
 if menu == "📈 1. 일별 시계열 추이 비교":
     st.subheader("📈 일별 교통 이용량 및 기상·대기질 변화 추이")
@@ -116,21 +116,60 @@ if menu == "📈 1. 일별 시계열 추이 비교":
         horizontal=True
     )
 
-    weather_options = {
-        "평균기온(°C)": {"color": "#FF6B6B", "default": True},
-        "최고기온(°C)": {"color": "#FFA94D", "default": False},
-        "최저기온(°C)": {"color": "#4DABF7", "default": False},
-        "일강수량(mm)": {"color": "#339AF0", "default": True},
-        "평균 상대습도(%)": {"color": "#20C997", "default": False},
-        "미세먼지": {"color": "#868E96", "default": False},
-        "초미세먼지": {"color": "#495057", "default": False},
-    }
-
-    fig_ts = make_subplots(specs=[[{"secondary_y": True}]])
-
-    # 1) 교통수단 선 추가 (함께 보기 vs 단독 보기)
     if view_mode == "따릉이 + 버스 함께 보기 (변화율 비교)":
         st.info("ℹ️ 따릉이(약 10만 건)와 버스(약 460만 명)는 단위 크기가 크게 다르므로, 각 수단의 **평균 대비 이용량 비율(평균=100%)**로 환산하여 두 교통수단의 움직임을 한눈에 비교합니다.")
+
+    # 그래프가 들어갈 자리 예약
+    chart_placeholder = st.empty()
+
+    # -----------------------------------------------------
+    # 그래프 아래 컨트롤 패널 (교통수단 + 기상변수 색상 & 투명도)
+    # -----------------------------------------------------
+    st.markdown("##### 🎨 교통수단 선 색상 및 투명도 설정")
+    t_col1, t_col2 = st.columns(2)
+    with t_col1:
+        c1, c2 = st.columns([1, 2.5])
+        bike_color = c1.color_picker("따릉이 색", "#2B8A3E", key="bike_color")
+        bike_alpha = c2.slider("따릉이 투명도", 0.1, 1.0, 1.0, 0.05, key="bike_alpha")
+    with t_col2:
+        c3, c4 = st.columns([1, 2.5])
+        bus_color = c3.color_picker("버스 색", "#1864AB", key="bus_color")
+        bus_alpha = c4.slider("버스 투명도", 0.1, 1.0, 1.0, 0.05, key="bus_alpha")
+
+    st.markdown("##### 🎛️ 기상·대기질 변수 선택 및 개별 색상·투명도 설정")
+    weather_options = {
+        "평균기온(°C)": {"color": "#FF6B6B", "default": True, "alpha": 0.85},
+        "최고기온(°C)": {"color": "#FFA94D", "default": False, "alpha": 0.80},
+        "최저기온(°C)": {"color": "#4DABF7", "default": False, "alpha": 0.80},
+        "일강수량(mm)": {"color": "#339AF0", "default": True, "alpha": 0.45},
+        "평균 상대습도(%)": {"color": "#20C997", "default": False, "alpha": 0.75},
+        "미세먼지": {"color": "#868E96", "default": False, "alpha": 0.70},
+        "초미세먼지": {"color": "#495057", "default": False, "alpha": 0.70},
+    }
+
+    selected_configs = {}
+    # 4열 + 3열 2줄로 깔끔하게 카드형 배치
+    var_items = list(weather_options.items())
+    row1_cols = st.columns(4)
+    row2_cols = st.columns(4)
+    all_cols = row1_cols + row2_cols
+
+    for idx, (var_name, props) in enumerate(var_items):
+        with all_cols[idx]:
+            with st.container(border=True):
+                is_checked = st.checkbox(f"**{var_name}**", value=props["default"], key=f"chk_{var_name}")
+                sub_c1, sub_c2 = st.columns([1, 2.2])
+                picked_color = sub_c1.color_picker("색상", props["color"], key=f"col_{var_name}", label_visibility="collapsed")
+                picked_alpha = sub_c2.slider("투명도", 0.1, 1.0, props["alpha"], 0.05, key=f"alp_{var_name}", label_visibility="collapsed")
+                if is_checked:
+                    selected_configs[var_name] = {"color": picked_color, "alpha": picked_alpha}
+
+    # -----------------------------------------------------
+    # 이중 Y축 Plotly 그래프 생성
+    # -----------------------------------------------------
+    fig_ts = make_subplots(specs=[[{"secondary_y": True}]])
+
+    if view_mode == "따릉이 + 버스 함께 보기 (변화율 비교)":
         bike_idx = (df["따릉이대여건수"] / df["따릉이대여건수"].mean()) * 100
         bus_idx = (df["버스 이용량"] / df["버스 이용량"].mean()) * 100
 
@@ -140,7 +179,8 @@ if menu == "📈 1. 일별 시계열 추이 비교":
                 y=bike_idx,
                 name="따릉이 (평균=100%)",
                 mode="lines",
-                line=dict(color="#2B8A3E", width=2.2),
+                opacity=bike_alpha,
+                line=dict(color=bike_color, width=2.4),
                 customdata=np.stack([df["날짜_요일"], df["따릉이대여건수"]], axis=-1),
                 hovertemplate="<b>%{customdata[0]}</b><br>따릉이: %{y:.1f}% (실제 %{customdata[1]:,.0f}건)<extra></extra>"
             ),
@@ -152,7 +192,8 @@ if menu == "📈 1. 일별 시계열 추이 비교":
                 y=bus_idx,
                 name="시내버스 (평균=100%)",
                 mode="lines",
-                line=dict(color="#1864AB", width=2.2),
+                opacity=bus_alpha,
+                line=dict(color=bus_color, width=2.4),
                 customdata=np.stack([df["날짜_요일"], df["버스 이용량"]], axis=-1),
                 hovertemplate="<b>%{customdata[0]}</b><br>시내버스: %{y:.1f}% (실제 %{customdata[1]:,.0f}명)<extra></extra>"
             ),
@@ -162,7 +203,8 @@ if menu == "📈 1. 일별 시계열 추이 비교":
     else:
         target_ts = "따릉이대여건수" if view_mode == "따릉이대여건수만 보기" else "버스 이용량"
         unit_str = "건" if target_ts == "따릉이대여건수" else "명"
-        line_color = "#2B8A3E" if target_ts == "따릉이대여건수" else "#1864AB"
+        line_color = bike_color if target_ts == "따릉이대여건수" else bus_color
+        line_alpha = bike_alpha if target_ts == "따릉이대여건수" else bus_alpha
 
         fig_ts.add_trace(
             go.Scatter(
@@ -170,7 +212,8 @@ if menu == "📈 1. 일별 시계열 추이 비교":
                 y=df[target_ts],
                 name=target_ts,
                 mode="lines",
-                line=dict(color=line_color, width=2.3),
+                opacity=line_alpha,
+                line=dict(color=line_color, width=2.5),
                 customdata=df[["날짜_요일"]],
                 hovertemplate="<b>%{customdata[0]}</b><br>" + f"{target_ts}: " + "%{y:,.0f}" + unit_str + "<extra></extra>"
             ),
@@ -178,30 +221,16 @@ if menu == "📈 1. 일별 시계열 추이 비교":
         )
         left_y_title = f"<b>{target_ts} ({unit_str})</b>"
 
-    # 그래프가 들어갈 자리 예약 (체크박스를 그래프 아래에 두기 위함)
-    chart_placeholder = st.empty()
-
-    # 그래프 아래 체크박스 UI
-    st.markdown("##### 🎛️ 그래프에 함께 표시할 기상·대기질 변수 선택 (체크박스로 켜고 끄기)")
-    chk_cols = st.columns(len(weather_options))
-    selected_vars = []
-
-    for idx, (var_name, props) in enumerate(weather_options.items()):
-        with chk_cols[idx]:
-            is_checked = st.checkbox(var_name, value=props["default"], key=f"ts_chk_{var_name}")
-            if is_checked:
-                selected_vars.append(var_name)
-
-    for var_name in selected_vars:
-        props = weather_options[var_name]
+    # 선택된 기상·대기질 변수 추가 (사용자 지정 색상 + 투명도 적용)
+    for var_name, cfg in selected_configs.items():
         if var_name == "일강수량(mm)":
             fig_ts.add_trace(
                 go.Bar(
                     x=df["일시"],
                     y=df[var_name],
                     name=var_name,
-                    marker_color=props["color"],
-                    opacity=0.45,
+                    marker_color=cfg["color"],
+                    opacity=cfg["alpha"],
                     customdata=df[["날짜_요일"]],
                     hovertemplate="<b>%{customdata[0]}</b><br>" + f"{var_name}: " + "%{y:.1f}<extra></extra>"
                 ),
@@ -214,16 +243,16 @@ if menu == "📈 1. 일별 시계열 추이 비교":
                     y=df[var_name],
                     name=var_name,
                     mode="lines",
-                    line=dict(color=props["color"], width=1.6, dash="dot"),
+                    opacity=cfg["alpha"],
+                    line=dict(color=cfg["color"], width=1.8),
                     customdata=df[["날짜_요일"]],
                     hovertemplate="<b>%{customdata[0]}</b><br>" + f"{var_name}: " + "%{y:.1f}<extra></extra>"
                 ),
                 secondary_y=True
             )
 
-    # X축 날짜 한글 포맷 설정 (Jan 2025 -> 2025년 01월)
     fig_ts.update_layout(
-        height=480,
+        height=490,
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=20, r=20, t=40, b=20),
@@ -240,7 +269,7 @@ if menu == "📈 1. 일별 시계열 추이 비교":
 
 
 # =========================================================
-# 메뉴 2: 선형 회귀 분석
+# 메뉴 2: 선형 회귀 분석 (점/회귀선 색상 & 투명도 조절 포함)
 # =========================================================
 elif menu == "📐 2. 날씨별 선형 회귀 분석":
     st.subheader("📐 기상·대기질 변수에 따른 교통 이용량 선형 회귀 분석")
@@ -248,7 +277,7 @@ elif menu == "📐 2. 날씨별 선형 회귀 분석":
 
     reg_chart_placeholder = st.empty()
 
-    st.markdown("##### 🎛️ 회귀 분석 변수 선택")
+    st.markdown("##### 🎛️ 회귀 분석 변수 및 스타일 설정")
     c1, c2, c3 = st.columns([2, 2, 1.5])
     with c1:
         x_var = st.selectbox(
@@ -266,6 +295,15 @@ elif menu == "📐 2. 날씨별 선형 회귀 분석":
         st.write("")
         st.write("")
         split_weekend = st.checkbox("평일 / 주말 색상 구분", value=True)
+
+    # 산점도 점 투명도 & 회귀선 색상 설정
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        dot_alpha = st.slider("관측치 점 투명도", 0.1, 1.0, 0.75, 0.05)
+    with s2:
+        line_reg_color = st.color_picker("회귀직선 색상", "#E03131")
+    with s3:
+        weekday_color = st.color_picker("평일 점 색상", "#1C7ED6") if split_weekend else st.color_picker("전체 점 색상", "#2B8A3E")
 
     X = df[[x_var]].values
     y = df[y_var].values
@@ -285,18 +323,18 @@ elif menu == "📐 2. 날씨별 선형 회귀 분석":
             x=x_var,
             y=y_var,
             color="주말구분",
-            color_discrete_map={"평일(월~금)": "#1C7ED6", "주말(토·일)": "#F76707"},
+            color_discrete_map={"평일(월~금)": weekday_color, "주말(토·일)": "#F76707"},
             custom_data=["날짜_요일", "평균기온(°C)", "일강수량(mm)", "미세먼지"],
-            opacity=0.75
+            opacity=dot_alpha
         )
     else:
         fig_reg = px.scatter(
             df,
             x=x_var,
             y=y_var,
-            color_discrete_sequence=["#2B8A3E"],
+            color_discrete_sequence=[weekday_color],
             custom_data=["날짜_요일", "평균기온(°C)", "일강수량(mm)", "미세먼지"],
-            opacity=0.75
+            opacity=dot_alpha
         )
 
     unit_text = "건" if y_var == "따릉이대여건수" else "명"
@@ -318,7 +356,7 @@ elif menu == "📐 2. 날씨별 선형 회귀 분석":
             y=y_pred_line,
             mode="lines",
             name=f"선형 회귀선 (결정계수 R²={r2:.3f})",
-            line=dict(color="#E03131", width=3)
+            line=dict(color=line_reg_color, width=3)
         )
     )
 
