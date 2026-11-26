@@ -1,3 +1,5 @@
+import os
+import glob
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -16,21 +18,31 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# 2. 데이터 로드 및 전처리 함수
+# 2. 데이터 로드 및 전처리 함수 (엑셀·CSV 자동 탐색)
 # ---------------------------------------------------------
 @st.cache_data
 def load_data():
-    df = pd.read_csv("seoul_weather_transit_2025.csv", encoding="utf-8-sig")
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    files = glob.glob(os.path.join(base_dir, "*.xlsx")) + glob.glob(os.path.join(base_dir, "*.csv"))
+    
+    if not files:
+        return None
+        
+    target_file = files[0]
+    if target_file.endswith(".xlsx"):
+        df = pd.read_excel(target_file)
+    else:
+        df = pd.read_csv(target_file, encoding="utf-8-sig")
+
     df["일시"] = pd.to_datetime(df["일시"])
     df["날짜_문자"] = df["일시"].dt.strftime("%Y-%m-%d")
     df["날짜_요일"] = df["날짜_문자"] + " (" + df["요일"] + ")"
     df["주말구분"] = df["요일"].apply(lambda x: "주말(토·일)" if x in ["토요일", "일요일"] else "평일(월~금)")
     return df
 
-try:
-    df = load_data()
-except FileNotFoundError:
-    st.error("🚨 'seoul_weather_transit_2025.csv' 파일을 찾을 수 없습니다. app.py와 같은 폴더에 파일을 넣어주세요!")
+df = load_data()
+if df is None:
+    st.error("🚨 데이터 파일을 찾을 수 없습니다. 깃허브의 app.py와 같은 폴더에 데이터 파일을 올려주세요!")
     st.stop()
 
 # ---------------------------------------------------------
@@ -68,14 +80,12 @@ with tab1:
     st.subheader("일별 교통 이용량 및 기상·대기질 변화 추이")
     st.caption("💡 그래프 위의 점이나 선에 마우스를 가까이 대면 **날짜와 요일**, 세부 수치가 함께 표시됩니다.")
 
-    # 교통수단 선택 (상단 라디오 버튼)
     target_ts = st.radio(
         "기준 교통수단 선택:",
         ["따릉이대여건수", "버스 이용량"],
         horizontal=True
     )
 
-    # 그래프 아래에서 선택할 변수 리스트 초기화 (세션 상태 활용)
     weather_options = {
         "평균기온(°C)": {"color": "#FF6B6B", "default": True},
         "최고기온(°C)": {"color": "#FFA94D", "default": False},
@@ -86,10 +96,8 @@ with tab1:
         "초미세먼지": {"color": "#495057", "default": False},
     }
 
-    # 이중 Y축 Plotly 그래프 생성 (왼쪽 축: 교통량 / 오른쪽 축: 기상 변수)
     fig_ts = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # 1) 기본 교통량 선 그래프 (왼쪽 Y축)
     bar_color = "#2B8A3E" if target_ts == "따릉이대여건수" else "#1864AB"
     fig_ts.add_trace(
         go.Scatter(
@@ -104,10 +112,8 @@ with tab1:
         secondary_y=False
     )
 
-    # 그래프 플레이스홀더 (체크박스를 그래프 아래에 배치하기 위해 위쪽 자리 예약)
     chart_placeholder = st.empty()
 
-    # 그래프 아래 체크박스 UI 배치
     st.markdown("##### 🎛️ 그래프에 함께 표시할 기상·대기질 변수 선택 (체크박스로 켜고 끄기)")
     chk_cols = st.columns(len(weather_options))
     selected_vars = []
@@ -118,7 +124,6 @@ with tab1:
             if is_checked:
                 selected_vars.append(var_name)
 
-    # 선택된 기상 변수들을 오른쪽 Y축에 추가
     for var_name in selected_vars:
         props = weather_options[var_name]
         if var_name == "일강수량(mm)":
@@ -158,7 +163,6 @@ with tab1:
     fig_ts.update_yaxes(title_text=f"<b>{target_ts}</b>", secondary_y=False)
     fig_ts.update_yaxes(title_text="<b>기상 · 대기질 수치</b>", secondary_y=True)
 
-    # 예약해 둔 그래프 자리에 렌더링
     chart_placeholder.plotly_chart(fig_ts, use_container_width=True)
 
 
@@ -171,7 +175,6 @@ with tab2:
 
     reg_chart_placeholder = st.empty()
 
-    # 그래프 아래 컨트롤 패널 (X축 변수, Y축 변수, 주말 구분)
     st.markdown("##### 🎛️ 회귀 분석 변수 선택")
     c1, c2, c3 = st.columns([2, 2, 1.5])
     with c1:
@@ -191,7 +194,6 @@ with tab2:
         st.write("")
         split_weekend = st.checkbox("평일 / 주말 색상 구분", value=True)
 
-    # 선형 회귀 모델 학습
     X = df[[x_var]].values
     y = df[y_var].values
     model = LinearRegression()
@@ -201,11 +203,9 @@ with tab2:
     r2 = model.score(X, y)
     corr = df[x_var].corr(df[y_var])
 
-    # 회귀선 좌표 계산
     x_range = np.linspace(df[x_var].min(), df[x_var].max(), 100)
     y_pred_line = model.predict(x_range.reshape(-1, 1))
 
-    # 산점도 생성
     if split_weekend:
         fig_reg = px.scatter(
             df,
@@ -237,7 +237,6 @@ with tab2:
         )
     )
 
-    # 회귀 직선 추가
     fig_reg.add_trace(
         go.Scatter(
             x=x_range,
@@ -257,14 +256,12 @@ with tab2:
 
     reg_chart_placeholder.plotly_chart(fig_reg, use_container_width=True)
 
-    # 회귀 분석 결과 요약 카드
     m1, m2, m3 = st.columns(3)
     unit_text = "건" if y_var == "따릉이대여건수" else "명"
     m1.metric("회귀 기울기 (1단위 증가 시 변화량)", f"{slope:+,.1f} {unit_text}")
     m2.metric("결정계수 (R² 설명력)", f"{r2:.3f} ({r2*100:.1f}%)")
     m3.metric("상관계수 (r)", f"{corr:+.3f}")
 
-    # 자동 해석 박스
     st.info(
         f"""
         **📊 분석 결과 자동 해석:**
